@@ -2107,12 +2107,6 @@ static id gs_weak_load(id obj)
 
   if (aSelector == 0)
     {
-      if (GSPrivateDefaultsFlag(GSMacOSXCompatible))
-	{
-	  [NSException raise: NSInvalidArgumentException
-		    format: @"%@ null selector given",
-	    NSStringFromSelector(_cmd)];
-	}
       return NO;
     }
 
