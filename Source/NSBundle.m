@@ -2109,8 +2109,10 @@ IF_NO_ARC(
       /* Get the binary and set up fraework name if it is a framework.
        */
       object = [self executablePath];
+      NSDebugMLLog(@"NSBundle", @"Dealing with object: %@\n", object);
       if (object == nil || [object length] == 0)
 	{
+    NSDebugMLLog(@"NSBundle", @"object is nil or 0 length\n");
 	  [load_lock unlock];
 	  return NO;
 	}
@@ -2130,6 +2132,7 @@ IF_NO_ARC(
 
       if (GSPrivateLoadModule(object, stderr, _bundle_load_callback, 0, 0))
 	{
+    NSDebugMLLog(@"NSBundle", @"dealing with stderr: %@\n", stderr);
 	  _codeLoaded = NO;
           _loadingBundle = savedLoadingBundle;
           if (nil == _loadingBundle)

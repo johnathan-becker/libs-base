@@ -141,6 +141,8 @@ GSPrivateLoadModule(NSString *filename, FILE *errorStream,
   void (*loadCallback)(Class, struct objc_category *),
   void **header, NSString *debugFilename)
 {
+
+NSDebugFLLog(@"NSBundle", @"attempting to gsprivateloadmodule: %@\n", filename);
 #ifdef NeXT_RUNTIME
   int errcode;
   dynamic_loaded = YES;
