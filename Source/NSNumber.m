@@ -222,7 +222,7 @@ return NSOrderedSame;
 }
 - (const char *) objCType
 {
-  return @encode(BOOL);
+  return @encode(unsigned char);
 }
 @end
 
@@ -758,7 +758,7 @@ if (aValue >= -1 && aValue <= 12)\
   if (self != NSNumberClass)
     {
       return [[[self alloc] initWithBytes: (const void *)&aValue
-        objCType: @encode(BOOL)] autorelease];
+        objCType: @encode(unsigned char)] autorelease];
     }
   if (0 == aValue)
     {

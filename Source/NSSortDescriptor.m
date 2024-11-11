@@ -310,7 +310,7 @@ static BOOL     initialized = NO;
   else
     {
       [coder encodeObject: _key];
-      [coder encodeValueOfObjCType: @encode(BOOL) at: &_ascending];
+      [coder encodeValueOfObjCType: @encode(unsigned char) at: &_ascending];
       [coder encodeValueOfObjCType: @encode(SEL) at: &_selector];
     }
 }
@@ -329,7 +329,7 @@ static BOOL     initialized = NO;
       else
         {
           ASSIGN(_key, [decoder decodeObject]);
-          [decoder decodeValueOfObjCType: @encode(BOOL) at: &_ascending];
+          [decoder decodeValueOfObjCType: @encode(unsigned char) at: &_ascending];
           [decoder decodeValueOfObjCType: @encode(SEL) at: &_selector];
         }
     }

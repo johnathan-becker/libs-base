@@ -2031,7 +2031,7 @@ static NSLock	*cached_proxies_gate = nil;
 	{
 	  BOOL	is_exception = NO;
 
-	  [node->value.obj decodeValueOfObjCType: @encode(BOOL)
+	  [node->value.obj decodeValueOfObjCType: @encode(unsigned char)
 					      at: &is_exception];
 	  if (is_exception == YES)
 	    {
@@ -2070,7 +2070,7 @@ static NSLock	*cached_proxies_gate = nil;
        * Find out if the server is returning an exception instead
        * of the return values.
        */
-      [aRmc decodeValueOfObjCType: @encode(BOOL) at: &is_exception];
+      [aRmc decodeValueOfObjCType: @encode(unsigned char) at: &is_exception];
       if (is_exception == YES)
 	{
 	  /* Decode the exception object, and raise it. */
@@ -2755,7 +2755,7 @@ static NSLock	*cached_proxies_gate = nil;
        * say that this is not an exception.
        */
       encoder = [self _newOutRmc: seq generate: 0 reply: NO];
-      [encoder encodeValueOfObjCType: @encode(BOOL) at: &is_exception];
+      [encoder encodeValueOfObjCType: @encode(unsigned char) at: &is_exception];
 
       /* Only encode return values if there is a non-void return value,
 	 a non-oneway void return value, or if there are values that were
@@ -2878,7 +2878,7 @@ static NSLock	*cached_proxies_gate = nil;
 		  [self _failOutRmc: encoder];
 		}
 	      op = [self _newOutRmc: seq generate: 0 reply: NO];
-	      [op encodeValueOfObjCType: @encode(BOOL)
+	      [op encodeValueOfObjCType: @encode(unsigned char)
 				     at: &is_exception];
 	      [op encodeBycopyObject: localException];
 	      [self _sendOutRmc: op type: METHOD_REPLY sequence: seq];

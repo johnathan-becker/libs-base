@@ -737,7 +737,7 @@ _arg_addr(NSInvocation *inv, int index)
     }
   if (*_inf[0].type != _C_VOID)
     {
-      [aCoder encodeValueOfObjCType: @encode(BOOL) at: &_validReturn];
+      [aCoder encodeValueOfObjCType: @encode(unsigned char) at: &_validReturn];
       if (_validReturn)
 	{
 	  [aCoder encodeValueOfObjCType: _inf[0].type at: _retval];
@@ -771,7 +771,7 @@ _arg_addr(NSInvocation *inv, int index)
   _argsRetained = YES;
   if (*_inf[0].type != _C_VOID)
     {
-      [aCoder decodeValueOfObjCType: @encode(BOOL) at: &_validReturn];
+      [aCoder decodeValueOfObjCType: @encode(unsigned char) at: &_validReturn];
       if (_validReturn)
         {
           [aCoder decodeValueOfObjCType: _inf[0].type at: _retval];

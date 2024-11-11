@@ -814,7 +814,7 @@ static NSMapTable	*absolutes = 0;
 {
   [aDecoder decodeValueOfObjCType: @encode(id) at: &abbrev];
   [aDecoder decodeValueOfObjCType: @encode(int) at: &offset];
-  [aDecoder decodeValueOfObjCType: @encode(BOOL) at: &is_dst];
+  [aDecoder decodeValueOfObjCType: @encode(unsigned char) at: &is_dst];
   return self;
 }
 

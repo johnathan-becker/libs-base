@@ -604,9 +604,9 @@ static NSUInteger _defaultBehavior = NSNumberFormatterBehavior10_4;
 
 - (void) encodeWithCoder: (NSCoder*)encoder
 {
-  [encoder encodeValueOfObjCType: @encode(BOOL) at: &_hasThousandSeparators];
-  [encoder encodeValueOfObjCType: @encode(BOOL) at: &_allowsFloats];
-  [encoder encodeValueOfObjCType: @encode(BOOL) at: &_localizesFormat];
+  [encoder encodeValueOfObjCType: @encode(unsigned char) at: &_hasThousandSeparators];
+  [encoder encodeValueOfObjCType: @encode(unsigned char) at: &_allowsFloats];
+  [encoder encodeValueOfObjCType: @encode(unsigned char) at: &_localizesFormat];
   [encoder encodeValueOfObjCType: @encode(unichar) at: &_thousandSeparator];
   [encoder encodeValueOfObjCType: @encode(unichar) at: &_decimalSeparator];
 
@@ -851,10 +851,10 @@ static NSUInteger _defaultBehavior = NSNumberFormatterBehavior10_4;
     }
   else
     {
-      [decoder decodeValueOfObjCType: @encode(BOOL)
+      [decoder decodeValueOfObjCType: @encode(unsigned char)
 				  at: &_hasThousandSeparators];
-      [decoder decodeValueOfObjCType: @encode(BOOL) at: &_allowsFloats];
-      [decoder decodeValueOfObjCType: @encode(BOOL) at: &_localizesFormat];
+      [decoder decodeValueOfObjCType: @encode(unsigned char) at: &_allowsFloats];
+      [decoder decodeValueOfObjCType: @encode(unsigned char) at: &_localizesFormat];
       [decoder decodeValueOfObjCType: @encode(unichar) at: &_thousandSeparator];
       [decoder decodeValueOfObjCType: @encode(unichar) at: &_decimalSeparator];
 
