@@ -267,7 +267,9 @@ static id gs_objc_proxy_lookup(id receiver, SEL op)
   pthread_key_create(&thread_slot_key, free);
   __objc_msg_forward3 = gs_objc_msg_forward3;
   __objc_msg_forward2 = gs_objc_msg_forward2;
+#ifndef _WIN32
   objc_proxy_lookup = gs_objc_proxy_lookup;
+#endif
 #else
 #if	HAVE_FORWARD2
   __objc_msg_forward2 = gs_objc_msg_forward2;
