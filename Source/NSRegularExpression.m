@@ -289,14 +289,16 @@ static UBool
 callback(const void *context, int32_t steps)
 {
   BOOL		stop = NO;
+  BOOL		keepGoing = YES;
   GSRegexBlock	block = (GSRegexBlock)context;
 
   if (NULL == context)
     {
-      return FALSE;
+      return TRUE; // keep going if there is no callback block
     }
   CALL_BLOCK(block, nil, NSMatchingProgress, &stop);
-  return stop;
+  keepGoing = !stop; // keep going if callback block didn't request a stop
+  return keepGoing;
 }
 
 
