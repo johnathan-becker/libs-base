@@ -2584,6 +2584,10 @@ static inline void gsedRelease(GSEnumeratedDirectory X)
 	}
       else
 	{
+    // do not delete root folder from stack
+    if (GSIArrayCount(_stack) == 1) {
+      break;
+    }
 	  GSIArrayRemoveLastItem(_stack);
 	  if (_currentFilePath != 0)
 	    {
