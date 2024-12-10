@@ -2456,7 +2456,7 @@ static inline void gsedRelease(GSEnumeratedDirectory X)
  */
 - (void) skipDescendents
 {
-  if (GSIArrayCount(_stack) > 0)
+  if (GSIArrayCount(_stack) > 1)
     {
       GSIArrayRemoveLastItem(_stack);
       if (_currentFilePath != 0)
@@ -2584,10 +2584,6 @@ static inline void gsedRelease(GSEnumeratedDirectory X)
 	}
       else
 	{
-    // do not delete root folder from stack
-    if (GSIArrayCount(_stack) == 1) {
-      break;
-    }
 	  GSIArrayRemoveLastItem(_stack);
 	  if (_currentFilePath != 0)
 	    {
