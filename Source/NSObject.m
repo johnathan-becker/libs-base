@@ -40,6 +40,7 @@
 
 #import "common.h"
 #include <objc/Protocol.h>
+#include <objc/message.h>
 #import "Foundation/NSMethodSignature.h"
 #import "Foundation/NSInvocation.h"
 #import "Foundation/NSLock.h"
@@ -2106,12 +2107,6 @@ static id gs_weak_load(id obj)
 
   if (aSelector == 0)
     {
-      if (GSPrivateDefaultsFlag(GSMacOSXCompatible))
-	{
-	  [NSException raise: NSInvalidArgumentException
-		    format: @"%@ null selector given",
-	    NSStringFromSelector(_cmd)];
-	}
       return NO;
     }
 
