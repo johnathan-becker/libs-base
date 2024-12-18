@@ -570,6 +570,46 @@ newLanguages(NSArray *oldNames)
   DESTROY(syncLock);
 }
 
+/* Due to the circular nature between NSBundle and NSUserDefaults we need to duplicate
+ this code similar to NSBundle in order to properly retrieve the bundle identifier
+ for use as the process name for the user defaults...
+ */
++ (NSString*) _processName
+{
+  NSString      *tempProcessName = [[NSProcessInfo processInfo] processName];
+  NSString      *rootPath    = [[[[NSProcessInfo processInfo] arguments] objectAtIndex: 0] stringByDeletingLastPathComponent];
+  NSString      *subPath     = @"Resources";
+  NSString      *subFile     = nil;
+  NSString      *infoPath    = nil;
+  NSFileManager *filemgr     = [NSFileManager defaultManager];
+
+  NSArray *fileNameArray = [NSArray arrayWithObjects: @"Info-gnustep.plist", @"Info.plist", nil];
+  NSUInteger i;
+  for (i = 0; i < [fileNameArray count]; i++)
+    {
+      subFile = [fileNameArray objectAtIndex:i];
+      NSString *fullpath = [rootPath stringByAppendingPathComponent: subPath];
+      fullpath           = [fullpath stringByAppendingPathComponent: subFile];
+      if ([filemgr fileExistsAtPath: fullpath])
+        {
+          infoPath = fullpath;
+          break;
+        }
+    }
+
+  if (infoPath)
+    {
+      NSDictionary *infoDict = AUTORELEASE([[NSDictionary alloc] initWithContentsOfFile: infoPath]);
+
+      if ([infoDict objectForKey: @"CFBundleIdentifier"])
+        {
+          tempProcessName = [infoDict objectForKey: @"CFBundleIdentifier"];
+	}
+    }
+
+  return tempProcessName;
+}
+
 + (void) initialize
 {
   if (self == [NSUserDefaults class])
@@ -595,7 +635,7 @@ newLanguages(NSArray *oldNames)
       argumentsDictionary = [NSDictionary new];
       [self registerAtExit];
 
-      processName = [[[NSProcessInfo processInfo] processName] copy];
+      ASSIGNCOPY(processName, [self _processName]);
 
       /* Initialise the defaults flags to take values from the
        * process arguments.  These are otherwise set in updateCache()
@@ -1146,6 +1186,11 @@ newLanguages(NSArray *oldNames)
   BOOL		flag;
 
   self = [super init];
+
+  if (processName == nil)
+  {
+    ASSIGNCOPY(processName, [[self class] _processName]);
+  }
 
   if (path == nil || [path isEqual: @""] == YES)
     {
