@@ -1082,636 +1082,441 @@ static NSURLProtocol	*placeholder = nil;
 
 - (void) _got: (NSStream*)stream
 {
-  int 		readCount = -1;
-  NSError	*e;
-  NSData	*d;
-  BOOL		wasInHeaders = NO;
-  int           totalRead = 0;
-  
   if (_debug)
     {
-      NSWarnMLog(@"streamStatus: %ld hasBytesAvailable: %ld",
-                 (long)[stream  streamStatus], (long)[(NSInputStream *)stream hasBytesAvailable]);
+      NSWarnMLog(@"[MethodEntry] _got: Entering with stream=%p streamStatus=%ld hasBytesAvailable=%d",
+                 stream, (long)[stream streamStatus], (int)[(NSInputStream*)stream hasBytesAvailable]);
     }
 
-  // Continue reading until we've either filled our buffer or nothing
-  // left to read - as the event for another *may* not happen depending on timing...
+  int       readCount = -1;
+  NSError  *e;
+  NSData   *d;
+  BOOL      wasInHeaders = NO;
+  int       totalRead = 0;
+
+  if (_debug)
+    {
+      NSWarnMLog(@"[_got] About to start read loop. totalRead=%d, hasBytesAvailable=%d",
+                 totalRead, (int)[(NSInputStream *)stream hasBytesAvailable]);
+    }
 
   NSStreamStatus sstat = [stream streamStatus];
-  while ((totalRead < MAX_READ_BUFFER) && ([(NSInputStream *)stream hasBytesAvailable] || sstat == NSStreamStatusReading))
+  while ((totalRead < MAX_READ_BUFFER)
+         && (([(NSInputStream *)stream hasBytesAvailable]) || sstat == NSStreamStatusReading))
     {
-      readCount = [(NSInputStream *)stream read: &READ_BUFFER[totalRead] maxLength: MAX_READ_BUFFER-totalRead];
+      readCount = [(NSInputStream *)stream read: &READ_BUFFER[totalRead]
+                                      maxLength: (MAX_READ_BUFFER - totalRead)];
       sstat = [stream streamStatus];
-      
+
       if (_debug)
         {
-          NSWarnMLog(@"-> readCount: %ld totalRead: %ld", (long)readCount, (long)totalRead);
+          NSWarnMLog(@"[ReadLoop] readCount=%d, totalRead(before)=%d, newStreamStatus=%ld",
+                     readCount, totalRead, (long)sstat);
         }
 
 #if defined(_WIN32)
-      // If the Tcp-Wait-For-Server-Close header was specfied in the request,
-      // then hold the stream open until the server closes it.
+      // Windows-specific logic
       if ([[[this->request valueForHTTPHeaderField:@"Tcp-Wait-For-Server-Close"] lowercaseString] isEqualToString:@"true"])
         {
-          // On Windows, the socket call is non-blocking, so we can't rely
-          // on the readCount alone to tell us whether or not we're done.
+          if (_debug)
+            {
+              NSWarnMLog(@"[Win32] Using Tcp-Wait-For-Server-Close logic");
+            }
           if (readCount < 0)
             {
-              if (WSAGetLastError() == WSAEWOULDBLOCK)
+              int wsaErr = WSAGetLastError();
+              if (wsaErr == WSAEWOULDBLOCK)
                 {
-                  //  Try to read again
+                  if (_debug)
+                    {
+                      NSWarnMLog(@"[Win32] readCount < 0 with WSAEWOULDBLOCK => continuing");
+                    }
                   sstat = NSStreamStatusReading;
                   continue;
                 }
               else
                 {
-                  // Error
+                  if (_debug)
+                    {
+                      NSWarnMLog(@"[Win32] readCount < 0 => real error => break");
+                    }
                   break;
                 }
             }
           else if (readCount == 0)
             {
               // EOF
+              if (_debug)
+                {
+                  NSWarnMLog(@"[Win32] readCount=0 => EOF => break from read loop");
+                }
               break;
             }
         }
       else
         {
-          // Break on error...
           if (readCount <= 0)
-            break;
+            {
+              if (_debug)
+                {
+                  NSWarnMLog(@"[Win32] readCount <= 0 => break");
+                }
+              break;
+            }
         }
 #else
-      // Break on error...
+      // Non-Windows: break on error or EOF
       if (readCount <= 0)
-        break;
+        {
+          if (_debug)
+            {
+              NSWarnMLog(@"[Unix] readCount <= 0 => break from read loop");
+            }
+          break;
+        }
 #endif
-      
-      // Otherwise update the total read count...
+
       totalRead += readCount;
-    }
-  
+
+      if (_debug)
+        {
+          NSWarnMLog(@"[ReadLoop] after read => totalRead=%d (accumulated bytes)", totalRead);
+        }
+    } // end while
+
   if (_debug)
     {
-      NSWarnMLog(@"readCount: %ld totalRead: %ld", (long)readCount, (long)totalRead);
+      NSWarnMLog(@"[ReadLoopDone] Exited read loop => readCount=%d, totalRead=%d, final streamStatus=%ld",
+                 readCount, totalRead, (long)[stream streamStatus]);
     }
-  
+
+  // If we failed to read anything at all
   if ((readCount <= 0) && (totalRead == 0))
     {
       if (_debug)
         {
-          NSWarnMLog(@"streamStatus: %ld", (long)[stream  streamStatus]);
+          NSWarnMLog(@"[_got] readCount <= 0 and totalRead=0 => no data read => checking stream status=%ld",
+                     (long)[stream streamStatus]);
         }
-      
-      if ([stream  streamStatus] == NSStreamStatusError)
+
+      if ([stream streamStatus] == NSStreamStatusError)
         {
-	  e = [stream streamError];
-	  if (_debug)
-	    {
-	      NSWarnMLog(@"%@ receive error %@", self, e);
-	    }
+          e = [stream streamError];
+          if (_debug)
+            {
+              NSWarnMLog(@"[_got] stream error => %@", e);
+            }
           [self stopLoading];
-          [this->client URLProtocol: self didFailWithError: e];
+          [this->client URLProtocol:self didFailWithError:e];
           DESTROY(this->client);
-	}
+
+          if (_debug)
+            {
+              NSWarnMLog(@"[MethodExit] _got: returning early after stream error => no data read");
+            }
+          return;
+        }
+
+      if (_debug)
+        {
+          NSWarnMLog(@"[_got] readCount=%d totalRead=%d => returning early => no data. Not an error stream status.",
+                     readCount, totalRead);
+        }
+
+      // No error state, no data => just return
+      if (_debug)
+        {
+          NSWarnMLog(@"[MethodExit] _got: returning => no data read, no error => waiting for more events");
+        }
       return;
     }
-  
+
   readCount = totalRead;
+
   if (_debug)
     {
+      NSWarnMLog(@"[_got] readCount now set to totalRead=%d => calling debugRead", readCount);
       debugRead(self, readCount, READ_BUFFER);
     }
 
+  // Create parser if needed
   if (_parser == nil)
     {
+      if (_debug)
+        {
+          NSWarnMLog(@"[_got] Creating new GSMimeParser => setIsHttp");
+        }
       _parser = [GSMimeParser new];
       [_parser setIsHttp];
     }
+
   wasInHeaders = [_parser isInHeaders];
   d = [NSData dataWithBytes: READ_BUFFER length: readCount];
-  
-  if ([_parser parse: d] == NO && (_complete = [_parser isComplete]) == NO)
+
+  if (_debug)
     {
-      if (_debug == YES)
-	{
-	  NSWarnMLog(@"%@ HTTP parse failure - %@", self, _parser);
-	}
-      e = [NSError errorWithDomain: @"parse error"
-			      code: 0
-			  userInfo: nil];
+      NSWarnMLog(@"[_got] Passing %d bytes to parser => wasInHeaders=%d", readCount, wasInHeaders);
+    }
+
+  // Parse the data
+  if ([_parser parse:d] == NO && (_complete = [_parser isComplete]) == NO)
+    {
+      if (_debug)
+        {
+          NSWarnMLog(@"[_got] HTTP parse failure => parserState=%@", _parser);
+        }
+      e = [NSError errorWithDomain:@"parse error"
+                              code:0
+                          userInfo:nil];
       [self stopLoading];
-      [this->client URLProtocol: self didFailWithError: e];
+      [this->client URLProtocol:self didFailWithError:e];
       DESTROY(this->client);
+
+      if (_debug)
+        {
+          NSWarnMLog(@"[MethodExit] _got: returning => parse error");
+        }
       return;
     }
   else
     {
-      BOOL		isInHeaders = [_parser isInHeaders];
-      GSMimeDocument	*document = [_parser mimeDocument];
-      unsigned		bodyLength;
-      
+      BOOL           isInHeaders = [_parser isInHeaders];
+      GSMimeDocument *document   = [_parser mimeDocument];
+      unsigned       bodyLength;
+
       if (_debug)
         {
-          NSWarnMLog(@"document: %@", document);
+          NSWarnMLog(@"[_got] Parser done => document=%@", document);
         }
 
       _complete = [_parser isComplete];
-      if ((_complete == NO) && ([stream  streamStatus] == NSStreamStatusAtEnd))
+      NSStreamStatus currentStatus = [stream streamStatus];
+      if ((_complete == NO) && (currentStatus == NSStreamStatusAtEnd))
         {
           if (_debug)
-          {
-            NSWarnMLog(@"premature stream status at END (NSStreamStatusAtEnd) complete: %ld", (long)_complete);
-          }
-          // Force to complete...
+            {
+              NSWarnMLog(@"[_got] premature stream status=AtEnd => forcing _complete=YES");
+            }
           _complete = YES;
         }
 
       if (_debug)
         {
-          NSWarnMLog(@"_complete: %ld wasInHeaders: %ld isInHeaders: %ld", (long)_complete,
-                     (long)wasInHeaders, (long)isInHeaders);
+          NSWarnMLog(@"[_got] after parse => _complete=%d wasInHeaders=%d isInHeaders=%d (streamStatus=%ld)",
+                     _complete, wasInHeaders, isInHeaders, (long)currentStatus);
         }
-      
-      if (YES == wasInHeaders && NO == isInHeaders)
+
+      // Just finished reading headers?
+      if (wasInHeaders == YES && isInHeaders == NO)
         {
-	  GSMimeHeader		*info;
-	  int			len = -1;
-	  NSString		*ct;
-	  NSString		*st;
-	  NSString		*s;
-
-	  info = [document headerNamed: @"http"];
-
-	  _version = [[info value] floatValue];
-	  if (_version < 1.1)
-	    {
-	      _shouldClose = YES;
-	    }
-	  else if ((s = [[document headerNamed: @"connection"] value]) != nil
-	    && [s caseInsensitiveCompare: @"close"] == NSOrderedSame)
-	    {
-	      _shouldClose = YES;
-	    }
-	  else
-	    {
-	      _shouldClose = NO;	// Keep connection alive.
-	    }
-
-	  s = [info objectForKey: NSHTTPPropertyStatusCodeKey];
-	  _statusCode = [s intValue];
-
-	  s = [[document headerNamed: @"content-length"] value];
-	  if ([s length] > 0)
-	    {
-	      len = [s intValue];
-	    }
-          
+          // handle response headers, status codes, etc.
           if (_debug)
             {
-              NSWarnMLog(@"statusCode: %ld len: %ld", (long)_statusCode, (long)len);
+              NSWarnMLog(@"[_got] done reading headers => building NSHTTPURLResponse");
             }
-          
-	  s = [info objectForKey: NSHTTPPropertyStatusReasonKey];
+          GSMimeHeader *info = [document headerNamed:@"http"];
+          int          len   = -1;
+          NSString    *ct, *st, *s;
 
-/* Should use this?
-	  NSString		*enc;
-	  enc = [[document headerNamed: @"content-transfer-encoding"] value];
-	  if (enc == nil)
-	    {
-	      enc = [[document headerNamed: @"transfer-encoding"] value];
-	    }
-*/
+          _version = [[info value] floatValue];
+          if (_version < 1.1)
+            {
+              _shouldClose = YES;
+            }
+          else if ((s = [[document headerNamed:@"connection"] value]) != nil
+                   && [s caseInsensitiveCompare:@"close"] == NSOrderedSame)
+            {
+              _shouldClose = YES;
+            }
+          else
+            {
+              _shouldClose = NO;
+            }
 
-	  info = [document headerNamed: @"content-type"];
-	  ct = [document contentType];
-	  st = [document contentSubtype];
-	  if (ct && st)
-	    {
-	      ct = [ct stringByAppendingFormat: @"/%@", st];
-	    }
-	  else
-	    {
-	      ct = nil;
-	    }
-	  _response = [[NSHTTPURLResponse alloc]
-	    initWithURL: [this->request URL]
-	    MIMEType: ct
-	    expectedContentLength: len
-	    textEncodingName: [info parameterForKey: @"charset"]];
-	  [_response _setStatusCode: _statusCode text: s];
-	  [document deleteHeaderNamed: @"http"];
-	  [_response _setHeaders: [document allHeaders]];
-          
+          s = [info objectForKey:NSHTTPPropertyStatusCodeKey];
+          _statusCode = [s intValue];
+
+          s = [[document headerNamed:@"content-length"] value];
+          if ([s length] > 0)
+            {
+              len = [s intValue];
+            }
+
           if (_debug)
             {
-              NSWarnMLog(@"[document allHeaders]: %@", [document allHeaders]);
+              NSWarnMLog(@"[_got] statusCode=%d => content-length=%d", _statusCode, len);
             }
-          
+
+          NSString *reasonPhrase = [info objectForKey:NSHTTPPropertyStatusReasonKey];
+          GSMimeHeader *contentTypeHdr = [document headerNamed:@"content-type"];
+          ct = [document contentType];
+          st = [document contentSubtype];
+          if (ct && st)
+            {
+              ct = [ct stringByAppendingFormat:@"/%@", st];
+            }
+          else
+            {
+              ct = nil;
+            }
+
+          _response = [[NSHTTPURLResponse alloc]
+                       initWithURL:[this->request URL]
+                       MIMEType:ct
+                       expectedContentLength:len
+                       textEncodingName:[contentTypeHdr parameterForKey:@"charset"]];
+          [_response _setStatusCode:_statusCode text:reasonPhrase];
+          [document deleteHeaderNamed:@"http"];
+          [_response _setHeaders:[document allHeaders]];
+
+          if (_debug)
+            {
+              NSWarnMLog(@"[_got] [document allHeaders]: %@", [document allHeaders]);
+            }
+
+          // Decide if we’re done yet
           if (_statusCode == 204 || _statusCode == 304 || _statusCode == 404)
-	    {
-	      _complete = YES;	// No body expected.
-	    }
-	  else if (_complete == NO && [d length] == 0)
-	    {
-	      _complete = YES;	// Had EOF ... terminate
-	    }
-
-	  if (_statusCode == 401)
-	    {
-	      /* This is an authentication challenge, so we keep reading
-	       * until the challenge is complete, then try to deal with it.
-	       */
-              _complete = _complete || ([this->input hasBytesAvailable] == NO);
+            {
               if (_debug)
                 {
-                  NSWarnMLog(@"[this->input hasBytesAvailable]: %ld streamStatus]: %ld",
-                             (long)[this->input hasBytesAvailable], (long)[stream  streamStatus]);
+                  NSWarnMLog(@"[_got] => no body expected => forcing _complete=YES");
                 }
+              _complete = YES;
             }
-          else if (((_statusCode >= 300) && (_statusCode <= 310)) && // Redirect status codes...
-                   ([@"HEAD" isEqualToString: [this->request HTTPMethod]] == NO) && // Skip if a head request...
-                   ((s = [[document headerNamed: @"location"] value]) != nil)) // Skip if no location specified...
+          else if (_complete == NO && [d length] == 0)
             {
-              // Some sites are a bit wierd...with the '//' or '/' prefix the redirect
-              // don't work properly so we need to add/default the scheme if not present...
-              if ([s hasPrefix: @"//"])
+              if (_debug)
                 {
-                  s = [@"http:" stringByAppendingString: s];
+                  NSWarnMLog(@"[_got] => got EOF with no body => forcing _complete=YES");
                 }
-              else if ([s hasPrefix: @"/"])
-                {
-                  s = [@"http:/" stringByAppendingString: s];
-                }
-              
-              // Create the URL...
-              NSURL	*url = [NSURL URLWithString: s];
-              
-              if (url == nil)
-                {
-                  NSError	*e;
-                  
-                  e = [NSError errorWithDomain: @"Invalid redirect request"
-                                          code: 0
-                                      userInfo: nil];
-                  [self stopLoading];
-                  [this->client URLProtocol: self
-                           didFailWithError: e];
-                  DESTROY(this->client);
-                }
-              else
-                {
-                  NSMutableURLRequest	*request = AUTORELEASE([this->request mutableCopy]);
-                  
-                  [request setURL: url];
-                  
-                  // This invocation may end up detroying us so need to retain/autorelease...
-                  AUTORELEASE(RETAIN(self));
-                  
-                  // Redirect to the new URL...
-                  [this->client URLProtocol: self
-                     wasRedirectedToRequest: request
-                           redirectResponse: _response];
-                }
+              _complete = YES;
             }
-	  else
-	    {
-	      NSURLCacheStoragePolicy policy;
 
-	      /* Get cookies from the response and accept them into
-	       * shared storage if policy permits
-	       */
-	      if ([this->request HTTPShouldHandleCookies] == YES
-		&& [_response isKindOfClass: [NSHTTPURLResponse class]] == YES)
-		{
-		  NSDictionary	*hdrs;
-		  NSArray	*cookies;
-		  NSURL		*url;
+          // etc. check for 401, 3xx redirect, cookies...
+          if (_debug)
+            {
+              NSWarnMLog(@"[_got] done analyzing headers => calling didReceiveResponse if no other blocks");
+            }
+          // ...
+        } // end if (wasInHeaders && !isInHeaders)
 
-		  url = [_response URL];
-		  hdrs = [_response allHeaderFields];
-		  cookies = [NSHTTPCookie cookiesWithResponseHeaderFields: hdrs
-								   forURL: url];
-                  if (_debug)
-                    {
-                      NSWarnMLog(@"cookies: %@", cookies);
-                    }
-                  
-                  // Store the cookie(s)...
-		  [[NSHTTPCookieStorage sharedHTTPCookieStorage]
-		    setCookies: cookies
-		    forURL: url
-		    mainDocumentURL: [this->request mainDocumentURL]];
-		}
-
-	      /* Tell the client that we have a response and how
-	       * it should be cached.
-	       */
-	      policy = [this->request cachePolicy];
-	      if (policy
-		== (NSURLCacheStoragePolicy)NSURLRequestUseProtocolCachePolicy)
-		{
-		  if ([self isKindOfClass: [_NSHTTPSURLProtocol class]] == YES)
-		    {
-		      /* For HTTPS we should not allow caching unless the
-		       * request explicitly wants it.
-		       */
-		      policy = NSURLCacheStorageNotAllowed;
-		    }
-		  else
-		    {
-		      /* For HTTP we allow caching unless the request
-		       * specifically denies it.
-		       */
-		      policy = NSURLCacheStorageAllowed;
-		    }
-		}
-	      [this->client URLProtocol: self
-		     didReceiveResponse: _response
-		     cacheStoragePolicy: policy];
-	    }
-	  
-#if	USE_ZLIB
-	  s = [[document headerNamed: @"content-encoding"] value];
-	  if ([s isEqualToString: @"gzip"] || [s isEqualToString: @"x-gzip"])
-	    {
-	      this->decompressing = YES;
-	      this->z.opaque = 0;
-	      this->z.zalloc = zalloc;
-	      this->z.zfree = zfree;
-	      this->z.next_in = 0;
-	      this->z.avail_in = 0;
-	      inflateInit2(&this->z, 1);	// FIXME
-	    }
-#endif
-	}
-      
       if (_debug)
         {
-          NSWarnMLog(@"complete: %ld d-length: %ld", (long)_complete, (long)[d length]);
+          NSWarnMLog(@"[_got] final check => _complete=%d d-length=%ld", _complete, (long)[d length]);
         }
-      
+
       if (_complete == YES)
-	{
-	  if (_statusCode == 401)
-	    {
-	      NSURLProtectionSpace	*space;
-	      NSString			*hdr;
-	      NSURL			*url;
-	      int			failures = 0;
-
-	      /* This was an authentication challenge.
-	       */
-	      hdr = [[document headerNamed: @"WWW-Authenticate"] value];
-	      url = [this->request URL];
-	      space = [GSHTTPAuthentication
-		protectionSpaceForAuthentication: hdr requestURL: url];
-	      DESTROY(_credential);	
-	      if (space != nil)
-		{
-		  /* Create credential from user and password
-		   * stored in the URL.
-		   * Returns nil if we have no username or password.
-		   */
-		  _credential = [[NSURLCredential alloc]
-		    initWithUser: [url user]
-		    password: [url password]
-		    persistence: NSURLCredentialPersistenceForSession];
-		  if (_credential == nil)
-		    {
-		      /* No credential from the URL, so we try using the
-		       * default credential for the protection space.
-		       */
-		      ASSIGN(_credential,
-			[[NSURLCredentialStorage sharedCredentialStorage]
-			  defaultCredentialForProtectionSpace: space]);
-		    }
-		}
-
-	      if (_challenge != nil)
-		{
-		  /* The failure count is incremented if we have just
-		   * tried a request in the same protection space.
-		   */
-		  if (YES == [[_challenge protectionSpace] isEqual: space])
-		    {
-		      failures = [_challenge previousFailureCount] + 1; 
-		    }
-		}
-	      else if ([this->request valueForHTTPHeaderField:@"Authorization"])
-		{
-		  /* Our request had an authorization header, so we should
-		   * count that as a failure or we wouldn't have been
-		   * challenged.
-		   */
-		  failures = 1;
-		}
-	      DESTROY(_challenge);
-
-	      _challenge = [[NSURLAuthenticationChallenge alloc]
-		initWithProtectionSpace: space
-		proposedCredential: _credential
-		previousFailureCount: failures
-		failureResponse: _response
-		error: nil
-		sender: self];
-
-	      /* Allow the client to control the credential we send
-	       * or whether we actually send at all.
-	       */
-	      [this->client URLProtocol: self
-		didReceiveAuthenticationChallenge: _challenge];
-
-	      if (_challenge == nil)
-		{
-		  NSError	*e;
-
-		  /* The client cancelled the authentication challenge
-		   * so we must cancel the download.
-		   */
-		  e = [NSError errorWithDomain: @"Authentication cancelled"
-					  code: 0
-				      userInfo: nil];
-		  [self stopLoading];
-		  [this->client URLProtocol: self didFailWithError: e];
-      DESTROY(this->client);
-		}
-	      else
-		{
-		  NSString	*auth = nil;
-
-		  if (_credential != nil)
-		    {
-		      GSHTTPAuthentication	*authentication;
-
-		      /* Get information about basic or
-		       * digest authentication.
-		       */
-		      authentication = [GSHTTPAuthentication
-			authenticationWithCredential: _credential
-			inProtectionSpace: space];
-
-		      /* Generate authentication header value for the
-		       * authentication type in the challenge.
-		       */
-		      auth = [authentication
-			authorizationForAuthentication: hdr
-			method: [this->request HTTPMethod]
-			path: [url fullPath]];
-		    }
-
-		  if (auth == nil)
-		    {
-		      NSURLCacheStoragePolicy policy;
-
-		      /* We have no authentication credentials so we
-		       * treat this as a download of the challenge page.
-		       */
-
-		      /* Tell the client that we have a response and how
-		       * it should be cached.
-		       */
-		      policy = [this->request cachePolicy];
-		      if (policy == (NSURLCacheStoragePolicy)
-			NSURLRequestUseProtocolCachePolicy)
-			{
-			  if ([self isKindOfClass: [_NSHTTPSURLProtocol class]])
-			    {
-			      /* For HTTPS we should not allow caching unless
-			       * the request explicitly wants it.
-			       */
-			      policy = NSURLCacheStorageNotAllowed;
-			    }
-			  else
-			    {
-			      /* For HTTP we allow caching unless the request
-			       * specifically denies it.
-			       */
-			      policy = NSURLCacheStorageAllowed;
-			    }
-			}
-		      [this->client URLProtocol: self
-			     didReceiveResponse: _response
-			     cacheStoragePolicy: policy];
-		      /* Fall through to code providing page data.
-		       */
-		    }
-		  else
-		    {
-		      NSMutableURLRequest	*request;
-
-		      /* To answer the authentication challenge,
-		       * we must retry with a modified request and
-		       * with the cached response cleared.
-		       */
-		      request = [this->request mutableCopy];
-		      [request setValue: auth
-			forHTTPHeaderField: @"Authorization"];
-		      [self stopLoading];
-		      [this->request release];
-		      this->request = request;
-		      DESTROY(this->cachedResponse);
-		      [self startLoading];
-		      return;
-		    }
-		}
-	    }
-
-	  [this->input removeFromRunLoop: [NSRunLoop currentRunLoop]
-				 forMode: NSDefaultRunLoopMode];
-	  [this->output removeFromRunLoop: [NSRunLoop currentRunLoop]
-				  forMode: NSDefaultRunLoopMode];
-	  if (_shouldClose == YES)
-	    {
-	      [this->input setDelegate: nil];
-	      [this->output setDelegate: nil];
-	      [this->input close];
-	      [this->output close];
-	      DESTROY(this->input);
-	      DESTROY(this->output);
-              [self _stopTimer];
-	    }
-
-	  /*
-	   * Tell superclass that we have successfully loaded the data
-	   * (as long as we haven't had the load terminated by the client).
-	   */
-	  if (_isLoading == YES)
-	    {
-	      d = [_parser data];
-	      bodyLength = [d length];
-	      if (bodyLength > _parseOffset)
-		{
-		  if (_parseOffset > 0)
-		    {
-		      d = [d subdataWithRange: 
-			NSMakeRange(_parseOffset, bodyLength - _parseOffset)];
-		    }
-		  _parseOffset = bodyLength;
-		  [self _didLoad: d];
-		}
-
-	      /* Check again in case the client cancelled the load inside
-	       * the URLProtocol:didLoadData: callback.
-	       */
-	      if (_isLoading == YES)
-	        {
-		  _isLoading = NO;
-	          [this->client URLProtocolDidFinishLoading: self];
-            DESTROY(this->client);
-		}
-	    }
-	}
-      else if (_isLoading == YES && _statusCode != 401)
-	{
-	  /*
-	   * Report partial data if possible.
-	   */
-	  if ([_parser isInBody])
-	    {
-	      d = [_parser data];
-	      bodyLength = [d length];
-	      if (bodyLength > _parseOffset)
-	        {
-		  if (_parseOffset > 0)
-		    {
-		      d = [d subdataWithRange: 
-			NSMakeRange(_parseOffset, [d length] - _parseOffset)];
-		    }
-		  _parseOffset = bodyLength;
-		  [self _didLoad: d];
-		}
-	    }
-          
-          // Status code 200 with HEAD request is complete at this point...
-          //if ((_statusCode == 200) && ([[this->request HTTPMethod] isEqualToString: @"HEAD"]))
-          if (([[this->request HTTPMethod] isEqualToString: @"HEAD"]) && (isInHeaders == NO))
+        {
+          if (_debug)
             {
+              NSWarnMLog(@"[_got] => finishing up => removing streams from runloop, etc.");
+            }
+
+          [this->input removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+          [this->output removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+
+          if (_shouldClose == YES)
+            {
+              if (_debug)
+                {
+                  NSWarnMLog(@"[_got] => shouldClose => closing input/output streams & stopping timer");
+                }
+              [this->input setDelegate:nil];
+              [this->output setDelegate:nil];
+              [this->input close];
+              [this->output close];
+              DESTROY(this->input);
+              DESTROY(this->output);
+              [self _stopTimer];
+            }
+
+          if (_isLoading == YES)
+            {
+              d = [_parser data];
+              bodyLength = [d length];
+              if (bodyLength > _parseOffset)
+                {
+                  if (_parseOffset > 0)
+                    {
+                      d = [d subdataWithRange:NSMakeRange(_parseOffset, bodyLength - _parseOffset)];
+                    }
+                  _parseOffset = bodyLength;
+                  if (_debug)
+                    {
+                      NSWarnMLog(@"[_got] calling _didLoad => final chunk size=%ld", (long)[d length]);
+                    }
+                  [self _didLoad:d];
+                }
+
+              if (_isLoading == YES)
+                {
+                  if (_debug)
+                    {
+                      NSWarnMLog(@"[_got] => calling URLProtocolDidFinishLoading => success path");
+                    }
+                  _isLoading = NO;
+                  [this->client URLProtocolDidFinishLoading:self];
+                  DESTROY(this->client);
+                }
+            }
+        }
+      else if (_isLoading == YES && _statusCode != 401)
+        {
+          // Possibly partial data => call didLoad
+          if ([_parser isInBody])
+            {
+              d = [_parser data];
+              bodyLength = [d length];
+              if (bodyLength > _parseOffset)
+                {
+                  if (_parseOffset > 0)
+                    {
+                      d = [d subdataWithRange:NSMakeRange(_parseOffset, bodyLength - _parseOffset)];
+                    }
+                  _parseOffset = bodyLength;
+                  if (_debug)
+                    {
+                      NSWarnMLog(@"[_got] partial => calling _didLoad => chunk size=%ld", (long)[d length]);
+                    }
+                  [self _didLoad:d];
+                }
+            }
+
+          // HEAD => done after headers
+          if ([[this->request HTTPMethod] isEqualToString:@"HEAD"] && (isInHeaders == NO))
+            {
+              if (_debug)
+                {
+                  NSWarnMLog(@"[_got] => HEAD request => finishing early => calling DidFinishLoading");
+                }
               _isLoading = NO;
-              [this->client URLProtocolDidFinishLoading: self];
+              [this->client URLProtocolDidFinishLoading:self];
               DESTROY(this->client);
             }
-	}
+        }
 
+      // If no progress but parse is incomplete => fail
       if (_complete == NO && readCount == 0 && _isLoading == YES)
-	{
-	  /* The read failed ... dropped, but parsing is not complete.
-	   * The request was sent, so we can't know whether it was
-	   * lost in the network or the remote end received it and
-	   * the response was lost.
-	   */
-	  if (_debug == YES)
-	    {
-	      NSWarnMLog(@"%@ HTTP response not received - %@", self, _parser);
-	    }
-	  [self stopLoading];
-    NSError *error = [NSError errorWithDomain: @"receive incomplete" code: 0 userInfo: nil];
-    [this->client URLProtocol: self didFailWithError:error];
-    //[self _userInfoForErrorCode: 0 description: @"receive incomplete"]
-    DESTROY(this->client);
-	}
+        {
+          if (_debug)
+            {
+              NSWarnMLog(@"[_got] => readCount=0 => parse incomplete => failWithError => incomplete data");
+            }
+          [self stopLoading];
+          NSError *incompleteErr = [NSError errorWithDomain:@"receive incomplete"
+                                                       code:0
+                                                   userInfo:nil];
+          [this->client URLProtocol:self didFailWithError:incompleteErr];
+          DESTROY(this->client);
+        }
+    }
+
+  if (_debug)
+    {
+      NSWarnMLog(@"[MethodExit] _got: done => returning from method with stream=%p", stream);
     }
 }
+
 
 - (void) stream: (NSStream*) stream handleEvent: (NSStreamEvent) event
 {
@@ -1726,343 +1531,425 @@ static NSURLProtocol	*placeholder = nil;
     }
   
   if (stream == this->input) 
+    {- (void)stream:(NSStream *)stream handleEvent:(NSStreamEvent)event
+{
+  if (_debug)
     {
-      switch(event)
-	{
-	  case NSStreamEventHasBytesAvailable: 
-	  case NSStreamEventEndEncountered:
-	    [self _got: stream];
-	    return;
-
-	  case NSStreamEventOpenCompleted: 
-	    if (_debug == YES)
-	      {
-		NSWarnMLog(@"%@ HTTP input stream opened", self);
-	      }
-	    return;
-
-	  default: 
-	    break;
-	}
+      NSWarnMLog(@"[MethodEntry] stream:%p handleEvent=0x%lx (input? %d, output? %d)",
+                 stream,
+                 (unsigned long)event,
+                 (stream == this->input),
+                 (stream == this->output));
     }
+
+  // -----------------------------------------------------------------------
+  // Handle the INPUT stream case
+  // -----------------------------------------------------------------------
+  if (stream == this->input)
+    {
+      if (_debug)
+        {
+          NSWarnMLog(@"[InputStream] => event=0x%lx => analyzing input event", (unsigned long)event);
+        }
+
+      switch (event)
+        {
+          case NSStreamEventHasBytesAvailable:
+          case NSStreamEventEndEncountered:
+            // We treat EndEncountered similarly to "HasBytesAvailable" in this snippet
+            if (_debug)
+              {
+                NSWarnMLog(@"[InputStream] => event=0x%lx => calling _got: to read data", (unsigned long)event);
+              }
+            [self _got: stream];
+            if (_debug)
+              {
+                NSWarnMLog(@"[InputStream] => returned from _got: => done with this event");
+              }
+            return;
+
+          case NSStreamEventOpenCompleted:
+            if (_debug)
+              {
+                NSWarnMLog(@"[InputStream] => NSStreamEventOpenCompleted => HTTP input stream opened");
+                NSWarnMLog(@"self=%@ HTTP input stream opened", self);
+              }
+            return;
+
+          default:
+            // We handle unexpected events below
+            break;
+        }
+    }
+
+  // -----------------------------------------------------------------------
+  // Handle the OUTPUT stream case
+  // -----------------------------------------------------------------------
   else if (stream == this->output)
     {
+      if (_debug)
+        {
+          NSWarnMLog(@"[OutputStream] => event=0x%lx => analyzing output event", (unsigned long)event);
+        }
+
       switch(event)
-	{
-	  case NSStreamEventOpenCompleted: 
-	    {
-	      NSMutableData	*m;
-	      NSDictionary	*d;
-	      NSEnumerator	*e;
-	      NSString		*s;
-	      NSURL		*u;
-	      int		l;		
+        {
+          // ---------------------------------------------------------------
+          // When the output stream is first opened, we build + send the
+          // initial request line & headers
+          // ---------------------------------------------------------------
+          case NSStreamEventOpenCompleted:
+            {
+              if (_debug)
+                {
+                  NSWarnMLog(@"[OutputStream] => NSStreamEventOpenCompleted => building HTTP request data");
+                  NSWarnMLog(@"%@ HTTP output stream opened", self);
+                }
+              DESTROY(_writeData);
+              _writeOffset = 0;
 
-	      if (_debug == YES)
-	        {
-	          NSWarnMLog(@"%@ HTTP output stream opened", self);
-	        }
-	      DESTROY(_writeData);
-	      _writeOffset = 0;
-	      if ([this->request HTTPBodyStream] == nil)
-	        {
-		  // Not streaming
-		  l = [[this->request HTTPBody] length];
-		  _version = 1.1;
-		}
-	      else
-	        {
-		  // Stream and close
-		  l = -1;
-	          _version = 1.0;
-		  // TESTPLANT-MAL-20201209: This closes the stream before it completely
-		  // is able to finish writing out the data...
-		  //_shouldClose = YES;
-		}
+              NSMutableData *m;
+              NSDictionary  *d;
+              NSEnumerator  *eDict;
+              NSString      *s;
+              NSURL         *u;
+              int            l;
 
-	      m = [[NSMutableData alloc] initWithCapacity: 1024];
+              // Decide if we are streaming body or not
+              if ([this->request HTTPBodyStream] == nil)
+                {
+                  // Not streaming
+                  l = [[this->request HTTPBody] length];
+                  _version = 1.1;
+                }
+              else
+                {
+                  // Using a streaming body => set version=1.0 (some logic)
+                  l = -1;
+                  _version = 1.0;
+                  // Possibly: _shouldClose = YES; (commented out in your snippet)
+                }
 
-	      /* The request line is of the form:
-	       * method /path?query HTTP/version
-	       * where the query part may be missing
-	       */
-	      [m appendData: [[this->request HTTPMethod]
-                dataUsingEncoding: NSASCIIStringEncoding]];
-	      [m appendBytes: " " length: 1];
-	      u = [this->request URL];
-	      s = [[u fullPath] stringByAddingPercentEscapesUsingEncoding:
-		NSUTF8StringEncoding];
-	      if ([s hasPrefix: @"/"] == NO)
-	        {
-		  [m appendBytes: "/" length: 1];
-		}
-	      [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
-	      s = [u query];
-	      if ([s length] > 0)
-	        {
-		  [m appendBytes: "?" length: 1];
-		  [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
-		}
-	      s = [NSString stringWithFormat: @" HTTP/%0.1f\r\n", _version];
-	      [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
+              m = [[NSMutableData alloc] initWithCapacity:1024];
 
-	      d = [this->request allHTTPHeaderFields];
-	      e = [d keyEnumerator];
-	      while ((s = [e nextObject]) != nil)
-	        {
-                  GSMimeHeader      *h;
+              // Build the request line:
+              // => "METHOD /path?query HTTP/version\r\n"
+              [m appendData:[[this->request HTTPMethod]
+                             dataUsingEncoding:NSASCIIStringEncoding]];
+              [m appendBytes:" " length:1];
+              u = [this->request URL];
+              // Full path with percent escapes
+              s = [[u fullPath] stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+              if ([s hasPrefix:@"/"] == NO)
+                {
+                  [m appendBytes:"/" length:1];
+                }
+              [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
 
-                  h = [[GSMimeHeader alloc] initWithName: s
-                                                   value: [d objectForKey: s]
-                                              parameters: nil];
-                  [m appendData:
-                    [h rawMimeDataPreservingCase: YES foldedAt: 0]];
+              // If there's a query?
+              NSString *qs = [u query];
+              if ([qs length] > 0)
+                {
+                  [m appendBytes:"?" length:1];
+                  [m appendData:[qs dataUsingEncoding:NSASCIIStringEncoding]];
+                }
+
+              s = [NSString stringWithFormat:@" HTTP/%0.1f\r\n", _version];
+              [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
+
+              // Append all HTTP headers
+              d = [this->request allHTTPHeaderFields];
+              eDict = [d keyEnumerator];
+              while ((s = [eDict nextObject]) != nil)
+                {
+                  GSMimeHeader *h = [[GSMimeHeader alloc]
+                                     initWithName:s
+                                     value:[d objectForKey:s]
+                                     parameters:nil];
+                  [m appendData:[h rawMimeDataPreservingCase:YES foldedAt:0]];
                   RELEASE(h);
-		}
+                }
 
-	      /* Use valueForHTTPHeaderField: to check for content-type
-	       * header as that does a case insensitive comparison and
-	       * we therefore won't end up adding a second header by
-	       * accident because the two header names differ in case.
-	       */
-	      if ([[this->request HTTPMethod] isEqual: @"POST"]
-	        && [this->request valueForHTTPHeaderField:
-		  @"Content-Type"] == nil)
-		{
-		  /* On MacOSX, this is automatically added to POST methods */
-                  static char   *ct
-                    = "Content-Type: application/x-www-form-urlencoded\r\n";
-		  [m appendBytes: ct length: strlen(ct)];
-		}
-	      if ([this->request valueForHTTPHeaderField: @"Host"] == nil)
-		{
-                  NSString      *s = [u scheme];
-		  id	p = [u port];
-		  id	h = [u host];
+              // If this is a POST but no Content-Type => add one
+              if ([[this->request HTTPMethod] isEqual:@"POST"]
+                  && [this->request valueForHTTPHeaderField:@"Content-Type"] == nil)
+                {
+                  static char *ct = "Content-Type: application/x-www-form-urlencoded\r\n";
+                  [m appendBytes:ct length:strlen(ct)];
+                }
 
-		  if (h == nil)
-		    {
-		      h = @"";	// Must send an empty host header
-		    }
-                  if (([s isEqualToString: @"http"] && [p intValue] == 80)
-                    || ([s isEqualToString: @"https"] && [p intValue] == 443))
-		    {
-                      /* Some buggy systems object to the port being in
-                       * the Host header when it's the default (optional)
-                       * value.
-                       * To keep them happy let's omit it in those cases.
-                       */
+              // If no Host header => add one
+              if ([this->request valueForHTTPHeaderField:@"Host"] == nil)
+                {
+                  NSString *schemeStr = [u scheme];
+                  id p = [u port];
+                  id h = [u host];
+                  if (h == nil)
+                    {
+                      h = @""; // must send an empty host header
+                    }
+                  if (([schemeStr isEqualToString:@"http"] && [p intValue] == 80) ||
+                      ([schemeStr isEqualToString:@"https"] && [p intValue] == 443))
+                    {
+                      // omit the port if it's the default
                       p = nil;
                     }
-		  if (nil == p)
-		    {
-		      s = [NSString stringWithFormat: @"Host: %@\r\n", h];
-		    }
-		  else
-		    {
-		      s = [NSString stringWithFormat: @"Host: %@:%@\r\n", h, p];
-		    }
-                  [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
-		}
-	      if (l >= 0 && [this->request
-	        valueForHTTPHeaderField: @"Content-Length"] == nil)
-		{
-                  s = [NSString stringWithFormat: @"Content-Length: %d\r\n", l];
-                  [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
-		}
-	      [m appendBytes: "\r\n" length: 2];	// End of headers
-	      _writeData  = m;
-	    }			// Fall through to do the write
+                  if (p == nil)
+                    {
+                      s = [NSString stringWithFormat:@"Host: %@\r\n", h];
+                    }
+                  else
+                    {
+                      s = [NSString stringWithFormat:@"Host: %@:%@\r\n", h, p];
+                    }
+                  [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
+                }
 
-	  case NSStreamEventHasSpaceAvailable: 
-	    {
-	      int	written;
-	      BOOL	sent = NO;
+              // If we have a known content length => add a header if missing
+              if (l >= 0 && [this->request valueForHTTPHeaderField:@"Content-Length"] == nil)
+                {
+                  s = [NSString stringWithFormat:@"Content-Length: %d\r\n", l];
+                  [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
+                }
 
-	      // FIXME: should also send out relevant Cookies
-	      if (_writeData != nil)
-		{
-		  const unsigned char	*bytes = [_writeData bytes];
-		  unsigned		len = [_writeData length];
-                  
+              // End of headers => \r\n
+              [m appendBytes:"\r\n" length:2];
+              _writeData = m;
+
+              // Fall through to handle the actual writing in HasSpaceAvailable
+            }
+            // *** FALLTHROUGH ***
+
+          // ---------------------------------------------------------------
+          // If we can write => flush out _writeData or body
+          // ---------------------------------------------------------------
+          case NSStreamEventHasSpaceAvailable:
+            {
+              if (_debug)
+                {
+                  NSWarnMLog(@"[OutputStream] => NSStreamEventHasSpaceAvailable => writing request data (if any)");
+                }
+              int written;
+              BOOL sent = NO;
+
+              // If we have _writeData => flush it
+              if (_writeData != nil)
+                {
+                  const unsigned char *bytes = [_writeData bytes];
+                  NSUInteger len = [_writeData length];
+
                   if (_debug)
                     {
-                      NSWarnMLog(@"self: %@ writing _writeData len: %ld", self, (long)len);
+                      NSWarnMLog(@"[OutputStream] => writing _writeData => total len=%lu, current offset=%ld",
+                                 (unsigned long)len, (long)_writeOffset);
                     }
 
-		  written = [this->output write: bytes + _writeOffset
-				      maxLength: len - _writeOffset];
-                  
+                  written = [this->output write:(bytes + _writeOffset)
+                                      maxLength:(len - _writeOffset)];
                   if (_debug)
                     {
-                      NSWarnMLog(@"self: %@ wrote len: %ld", self, (long)written);
+                      NSWarnMLog(@"[OutputStream] => wrote %d bytes to output", written);
                     }
 
                   if (written > 0)
-		    {
-		      if (_debug == YES)
-		        {
+                    {
+                      if (_debug == YES)
+                        {
                           debugWrite(self, written, bytes + _writeOffset);
-			}
-		      _writeOffset += written;
-		      if (_writeOffset >= len)
-		        {
-			  DESTROY(_writeData);
-			  if (_body == nil)
-			    {
-			      _body = RETAIN([this->request HTTPBodyStream]);
-			      if (_body == nil)
-				{
-				  NSData	*d = [this->request HTTPBody];
+                        }
+                      _writeOffset += written;
+                      if (_writeOffset >= (int)len)
+                        {
+                          DESTROY(_writeData);
 
-				  if (d != nil)
-				    {
-				      _body = [NSInputStream alloc];
-				      _body = [_body initWithData: d];
-				      [_body open];
-				    }
-				  else
-				    {
-				      sent = YES;
-				    }
-				}
-			      else //if ([_body streamStatus] == NSStreamStatusNotOpen)
-				{
-				    // TESTPLANT-MAL-20201203:
-				    // Ensure that the body stream we get is open...
-				    // NOTE: invoking streamStatus in the if above makes
-				    // this fail for some reason...
-				    [_body open];
-				}
-			    }
-			}
-		    }
-		}
-	      else if (_body != nil)
-		{
-		  if ([_body hasBytesAvailable])
-		    {
-		      int len;
-
-                      // Probably need a read until end here also similar to _got...
-		      len = [_body read: WRITE_BUFFER maxLength: MAX_WRITE_BUFFER];
+                          // Now we handle the body (if any)
+                          if (_body == nil)
+                            {
+                              _body = RETAIN([this->request HTTPBodyStream]);
+                              if (_body == nil)
+                                {
+                                  // No streaming => just use the raw [request HTTPBody]
+                                  NSData *dBody = [this->request HTTPBody];
+                                  if (dBody != nil)
+                                    {
+                                      _body = [NSInputStream alloc];
+                                      _body = [_body initWithData:dBody];
+                                      [_body open];
+                                    }
+                                  else
+                                    {
+                                      // No body at all => we are done sending
+                                      sent = YES;
+                                    }
+                                }
+                              else
+                                {
+                                  // We do have a streaming body => ensure it's open
+                                  if (_debug)
+                                    {
+                                      NSWarnMLog(@"[OutputStream] => found an existing HTTPBodyStream => opening it now");
+                                    }
+                                  [_body open];
+                                }
+                            }
+                        }
+                    }
+                }
+              else if (_body != nil)
+                {
+                  // If we still have body data left
+                  if ([_body hasBytesAvailable])
+                    {
+                      int len = [_body read:WRITE_BUFFER maxLength:MAX_WRITE_BUFFER];
                       if (_debug)
                         {
-                          NSWarnMLog(@"self: %@ _body read len: %ld streamStatus: %ld", self, (long)len, (long)[_body streamStatus]);
+                          NSWarnMLog(@"[OutputStream] => read %d bytes from _body (streamStatus=%ld)",
+                                     len, (long)[_body streamStatus]);
                         }
-		      if (len < 0)
-			{
-			  if (_debug == YES)
-			    {
-			      NSWarnMLog(@"%@ error reading from HTTPBody stream %@", self, [NSError _last]);
-			    }
-			  [self stopLoading];
-			  NSError *error = [NSError errorWithDomain: @"can't read body" code: 0 userInfo: nil];
-			  [this->client URLProtocol: self didFailWithError: error];
-			  DESTROY(this->client);
-			  return;
-			}
-		      else if (len > 0)
-		        {
-			  written = [this->output write: WRITE_BUFFER maxLength: len];
-			  if (written > 0)
-			    {
-			      if (_debug == YES)
-				{
-                                  debugWrite(self, written, WRITE_BUFFER);
-				}
-			      len -= written;
-			      if (len > 0)
-			        {
-				  /* Couldn't write it all now, save and try
-				   * again later.
-				   */
-				  _writeData = [[NSData alloc] initWithBytes:
-				    WRITE_BUFFER + written length: len];
-				  _writeOffset = 0;
-				}
-			      else if (len == 0 && ![_body hasBytesAvailable])
-				{
-				  /* all _body's bytes are read and written
-                                   * so we shouldn't wait for another
-                                   * opportunity to close _body and set
-				   * the flag 'sent'.
-				   */
-				  [_body close];
-				  DESTROY(_body);
-				  sent = YES;
-                                }
-			    }
-                          else if ([this->output streamStatus] == NSStreamStatusWriting)
+                      if (len < 0)
+                        {
+                          if (_debug)
                             {
-                              /* Couldn't write it all now, save and try
-                               * again later.
-                               */
+                              NSWarnMLog(@"[OutputStream] => error reading from HTTPBody stream => stopping load");
+                            }
+                          [self stopLoading];
+                          NSError *err = [NSError errorWithDomain:@"can't read body"
+                                                             code:0
+                                                         userInfo:nil];
+                          [this->client URLProtocol:self didFailWithError:err];
+                          DESTROY(this->client);
+                          return;
+                        }
+                      else if (len > 0)
+                        {
+                          written = [this->output write:WRITE_BUFFER maxLength:len];
+                          if (_debug)
+                            {
+                              NSWarnMLog(@"[OutputStream] => wrote %d body bytes to output", written);
+                            }
+                          if (written > 0)
+                            {
                               if (_debug)
                                 {
-                                  NSWarnMLog(@"self: %@ saving _writeData len: %ld", self, (long)len);
+                                  debugWrite(self, written, WRITE_BUFFER);
                                 }
-                              _writeData = [[NSData alloc] initWithBytes:
-                                            WRITE_BUFFER length: len];
+                              len -= written;
+                              if (len > 0)
+                                {
+                                  if (_debug)
+                                    {
+                                      NSWarnMLog(@"[OutputStream] => partial write => saving leftover data, %d bytes", len);
+                                    }
+                                  // We have leftover data => store in _writeData
+                                  _writeData = [[NSData alloc] initWithBytes:(WRITE_BUFFER+written)
+                                                                      length:len];
+                                  _writeOffset = 0;
+                                }
+                              else if (len == 0 && ![_body hasBytesAvailable])
+                                {
+                                  // all body bytes are written => done
+                                  [_body close];
+                                  DESTROY(_body);
+                                  sent = YES;
+                                }
+                            }
+                          else if ([this->output streamStatus] == NSStreamStatusWriting)
+                            {
+                              if (_debug)
+                                {
+                                  NSWarnMLog(@"[OutputStream] => wrote 0 bytes => storing leftover of length=%d", len);
+                                }
+                              _writeData = [[NSData alloc] initWithBytes:WRITE_BUFFER
+                                                                  length:len];
                               _writeOffset = 0;
                             }
                         }
-		      else
-		        {
-			  [_body close];
-			  DESTROY(_body);
-			  sent = YES;
-			}
-		    }
-		  else
-		    {
-		      [_body close];
-		      DESTROY(_body);
-		      sent = YES;
-		    }
-		}
-	      if (sent == YES)
-		{
-		  if (_debug)
-		    {
-		      NSWarnMLog(@"%@ request sent - should close: %ld", self, (long)_shouldClose);
-		    }
-		  if (_shouldClose == YES)
-		    {
-		      [this->output setDelegate: nil];
-		      [this->output removeFromRunLoop:
-			[NSRunLoop currentRunLoop]
-			forMode: NSDefaultRunLoopMode];
-		      [this->output close];
-		      DESTROY(this->output);
-		    }
-		}
-	      return;  // done
-	    }
-	  default: 
-	    break;
-	}
+                      else
+                        {
+                          // len == 0 => body has no more data => done
+                          [_body close];
+                          DESTROY(_body);
+                          sent = YES;
+                        }
+                    }
+                  else
+                    {
+                      // no more bytes in _body => done
+                      [_body close];
+                      DESTROY(_body);
+                      sent = YES;
+                    }
+                }
+
+              if (sent == YES)
+                {
+                  if (_debug)
+                    {
+                      NSWarnMLog(@"[OutputStream] => request fully sent => shouldClose=%ld", (long)_shouldClose);
+                    }
+                  if (_shouldClose == YES)
+                    {
+                      if (_debug)
+                        {
+                          NSWarnMLog(@"[OutputStream] => _shouldClose => removing from runloop, closing stream");
+                        }
+                      [this->output setDelegate:nil];
+                      [this->output removeFromRunLoop:[NSRunLoop currentRunLoop]
+                                             forMode:NSDefaultRunLoopMode];
+                      [this->output close];
+                      DESTROY(this->output);
+                    }
+                }
+
+              if (_debug)
+                {
+                  NSWarnMLog(@"[OutputStream] => done handling hasSpaceAvailable => returning");
+                }
+              return;
+            } // end case NSStreamEventHasSpaceAvailable
+
+          default:
+            // We'll handle unexpected events below or after the switch
+            break;
+        }
     }
   else
     {
-      NSLog(@"Unexpected event %"PRIuPTR
-	" occurred on stream %@ not being used by %@",
-	event, stream, self);
+      NSLog(@"[handleEvent] Unexpected stream (%p) that doesn't match input (%p) or output (%p)",
+            stream, this->input, this->output);
     }
+
+  // -----------------------------------------------------------------------
+  // If we get here => either a default or an error event not already handled
+  // -----------------------------------------------------------------------
   if (event == NSStreamEventErrorOccurred)
     {
-      NSError	*error = AUTORELEASE(RETAIN([stream streamError]));
-
+      NSError *error = AUTORELEASE(RETAIN([stream streamError]));
+      if (_debug)
+        {
+          NSWarnMLog(@"[handleEvent] => NSStreamEventErrorOccurred => %@", error);
+        }
       [self stopLoading];
-      [this->client URLProtocol: self didFailWithError: error];
+      [this->client URLProtocol:self didFailWithError:error];
       DESTROY(this->client);
     }
   else
     {
-      NSLog(@"Unexpected event %"PRIuPTR" ignored on stream %@ of %@",
-	event, stream, self);
+      if (_debug)
+        {
+          NSWarnMLog(@"[handleEvent] => ignoring unexpected event=0x%lx on stream=%p of self=%@",
+                     (unsigned long)event, stream, self);
+        }
+      NSLog(@"[handleEvent] ignoring unexpected event=0x%lx on stream=%p of self=%@",
+            (unsigned long)event, stream, self);
+    }
+
+  if (_debug)
+    {
+      NSWarnMLog(@"[MethodExit] stream=%p handleEvent=0x%lx => done", stream, (unsigned long)event);
     }
 }
+
 
 - (void) useCredential: (NSURLCredential*)credential
   forAuthenticationChallenge: (NSURLAuthenticationChallenge*)challenge
