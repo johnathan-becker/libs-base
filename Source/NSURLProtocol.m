@@ -1531,425 +1531,343 @@ static NSURLProtocol	*placeholder = nil;
     }
   
   if (stream == this->input) 
-    {- (void)stream:(NSStream *)stream handleEvent:(NSStreamEvent)event
-{
-  if (_debug)
     {
-      NSWarnMLog(@"[MethodEntry] stream:%p handleEvent=0x%lx (input? %d, output? %d)",
-                 stream,
-                 (unsigned long)event,
-                 (stream == this->input),
-                 (stream == this->output));
+      switch(event)
+	{
+	  case NSStreamEventHasBytesAvailable: 
+	  case NSStreamEventEndEncountered:
+	    [self _got: stream];
+	    return;
+
+	  case NSStreamEventOpenCompleted: 
+	    if (_debug == YES)
+	      {
+		NSWarnMLog(@"%@ HTTP input stream opened", self);
+	      }
+	    return;
+
+	  default: 
+	    break;
+	}
     }
-
-  // -----------------------------------------------------------------------
-  // Handle the INPUT stream case
-  // -----------------------------------------------------------------------
-  if (stream == this->input)
-    {
-      if (_debug)
-        {
-          NSWarnMLog(@"[InputStream] => event=0x%lx => analyzing input event", (unsigned long)event);
-        }
-
-      switch (event)
-        {
-          case NSStreamEventHasBytesAvailable:
-          case NSStreamEventEndEncountered:
-            // We treat EndEncountered similarly to "HasBytesAvailable" in this snippet
-            if (_debug)
-              {
-                NSWarnMLog(@"[InputStream] => event=0x%lx => calling _got: to read data", (unsigned long)event);
-              }
-            [self _got: stream];
-            if (_debug)
-              {
-                NSWarnMLog(@"[InputStream] => returned from _got: => done with this event");
-              }
-            return;
-
-          case NSStreamEventOpenCompleted:
-            if (_debug)
-              {
-                NSWarnMLog(@"[InputStream] => NSStreamEventOpenCompleted => HTTP input stream opened");
-                NSWarnMLog(@"self=%@ HTTP input stream opened", self);
-              }
-            return;
-
-          default:
-            // We handle unexpected events below
-            break;
-        }
-    }
-
-  // -----------------------------------------------------------------------
-  // Handle the OUTPUT stream case
-  // -----------------------------------------------------------------------
   else if (stream == this->output)
     {
-      if (_debug)
-        {
-          NSWarnMLog(@"[OutputStream] => event=0x%lx => analyzing output event", (unsigned long)event);
-        }
-
       switch(event)
-        {
-          // ---------------------------------------------------------------
-          // When the output stream is first opened, we build + send the
-          // initial request line & headers
-          // ---------------------------------------------------------------
-          case NSStreamEventOpenCompleted:
-            {
-              if (_debug)
-                {
-                  NSWarnMLog(@"[OutputStream] => NSStreamEventOpenCompleted => building HTTP request data");
-                  NSWarnMLog(@"%@ HTTP output stream opened", self);
-                }
-              DESTROY(_writeData);
-              _writeOffset = 0;
+	{
+	  case NSStreamEventOpenCompleted: 
+	    {
+	      NSMutableData	*m;
+	      NSDictionary	*d;
+	      NSEnumerator	*e;
+	      NSString		*s;
+	      NSURL		*u;
+	      int		l;		
 
-              NSMutableData *m;
-              NSDictionary  *d;
-              NSEnumerator  *eDict;
-              NSString      *s;
-              NSURL         *u;
-              int            l;
+	      if (_debug == YES)
+	        {
+	          NSWarnMLog(@"%@ HTTP output stream opened", self);
+	        }
+	      DESTROY(_writeData);
+	      _writeOffset = 0;
+	      if ([this->request HTTPBodyStream] == nil)
+	        {
+		  // Not streaming
+		  l = [[this->request HTTPBody] length];
+		  _version = 1.1;
+		}
+	      else
+	        {
+		  // Stream and close
+		  l = -1;
+	          _version = 1.0;
+		  // TESTPLANT-MAL-20201209: This closes the stream before it completely
+		  // is able to finish writing out the data...
+		  //_shouldClose = YES;
+		}
 
-              // Decide if we are streaming body or not
-              if ([this->request HTTPBodyStream] == nil)
-                {
-                  // Not streaming
-                  l = [[this->request HTTPBody] length];
-                  _version = 1.1;
-                }
-              else
-                {
-                  // Using a streaming body => set version=1.0 (some logic)
-                  l = -1;
-                  _version = 1.0;
-                  // Possibly: _shouldClose = YES; (commented out in your snippet)
-                }
+	      m = [[NSMutableData alloc] initWithCapacity: 1024];
 
-              m = [[NSMutableData alloc] initWithCapacity:1024];
+	      /* The request line is of the form:
+	       * method /path?query HTTP/version
+	       * where the query part may be missing
+	       */
+	      [m appendData: [[this->request HTTPMethod]
+                dataUsingEncoding: NSASCIIStringEncoding]];
+	      [m appendBytes: " " length: 1];
+	      u = [this->request URL];
+	      s = [[u fullPath] stringByAddingPercentEscapesUsingEncoding:
+		NSUTF8StringEncoding];
+	      if ([s hasPrefix: @"/"] == NO)
+	        {
+		  [m appendBytes: "/" length: 1];
+		}
+	      [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
+	      s = [u query];
+	      if ([s length] > 0)
+	        {
+		  [m appendBytes: "?" length: 1];
+		  [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
+		}
+	      s = [NSString stringWithFormat: @" HTTP/%0.1f\r\n", _version];
+	      [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
 
-              // Build the request line:
-              // => "METHOD /path?query HTTP/version\r\n"
-              [m appendData:[[this->request HTTPMethod]
-                             dataUsingEncoding:NSASCIIStringEncoding]];
-              [m appendBytes:" " length:1];
-              u = [this->request URL];
-              // Full path with percent escapes
-              s = [[u fullPath] stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
-              if ([s hasPrefix:@"/"] == NO)
-                {
-                  [m appendBytes:"/" length:1];
-                }
-              [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
+	      d = [this->request allHTTPHeaderFields];
+	      e = [d keyEnumerator];
+	      while ((s = [e nextObject]) != nil)
+	        {
+                  GSMimeHeader      *h;
 
-              // If there's a query?
-              NSString *qs = [u query];
-              if ([qs length] > 0)
-                {
-                  [m appendBytes:"?" length:1];
-                  [m appendData:[qs dataUsingEncoding:NSASCIIStringEncoding]];
-                }
-
-              s = [NSString stringWithFormat:@" HTTP/%0.1f\r\n", _version];
-              [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
-
-              // Append all HTTP headers
-              d = [this->request allHTTPHeaderFields];
-              eDict = [d keyEnumerator];
-              while ((s = [eDict nextObject]) != nil)
-                {
-                  GSMimeHeader *h = [[GSMimeHeader alloc]
-                                     initWithName:s
-                                     value:[d objectForKey:s]
-                                     parameters:nil];
-                  [m appendData:[h rawMimeDataPreservingCase:YES foldedAt:0]];
+                  h = [[GSMimeHeader alloc] initWithName: s
+                                                   value: [d objectForKey: s]
+                                              parameters: nil];
+                  [m appendData:
+                    [h rawMimeDataPreservingCase: YES foldedAt: 0]];
                   RELEASE(h);
-                }
+		}
 
-              // If this is a POST but no Content-Type => add one
-              if ([[this->request HTTPMethod] isEqual:@"POST"]
-                  && [this->request valueForHTTPHeaderField:@"Content-Type"] == nil)
-                {
-                  static char *ct = "Content-Type: application/x-www-form-urlencoded\r\n";
-                  [m appendBytes:ct length:strlen(ct)];
-                }
+	      /* Use valueForHTTPHeaderField: to check for content-type
+	       * header as that does a case insensitive comparison and
+	       * we therefore won't end up adding a second header by
+	       * accident because the two header names differ in case.
+	       */
+	      if ([[this->request HTTPMethod] isEqual: @"POST"]
+	        && [this->request valueForHTTPHeaderField:
+		  @"Content-Type"] == nil)
+		{
+		  /* On MacOSX, this is automatically added to POST methods */
+                  static char   *ct
+                    = "Content-Type: application/x-www-form-urlencoded\r\n";
+		  [m appendBytes: ct length: strlen(ct)];
+		}
+	      if ([this->request valueForHTTPHeaderField: @"Host"] == nil)
+		{
+                  NSString      *s = [u scheme];
+		  id	p = [u port];
+		  id	h = [u host];
 
-              // If no Host header => add one
-              if ([this->request valueForHTTPHeaderField:@"Host"] == nil)
-                {
-                  NSString *schemeStr = [u scheme];
-                  id p = [u port];
-                  id h = [u host];
-                  if (h == nil)
-                    {
-                      h = @""; // must send an empty host header
-                    }
-                  if (([schemeStr isEqualToString:@"http"] && [p intValue] == 80) ||
-                      ([schemeStr isEqualToString:@"https"] && [p intValue] == 443))
-                    {
-                      // omit the port if it's the default
+		  if (h == nil)
+		    {
+		      h = @"";	// Must send an empty host header
+		    }
+                  if (([s isEqualToString: @"http"] && [p intValue] == 80)
+                    || ([s isEqualToString: @"https"] && [p intValue] == 443))
+		    {
+                      /* Some buggy systems object to the port being in
+                       * the Host header when it's the default (optional)
+                       * value.
+                       * To keep them happy let's omit it in those cases.
+                       */
                       p = nil;
                     }
-                  if (p == nil)
-                    {
-                      s = [NSString stringWithFormat:@"Host: %@\r\n", h];
-                    }
-                  else
-                    {
-                      s = [NSString stringWithFormat:@"Host: %@:%@\r\n", h, p];
-                    }
-                  [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
-                }
+		  if (nil == p)
+		    {
+		      s = [NSString stringWithFormat: @"Host: %@\r\n", h];
+		    }
+		  else
+		    {
+		      s = [NSString stringWithFormat: @"Host: %@:%@\r\n", h, p];
+		    }
+                  [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
+		}
+	      if (l >= 0 && [this->request
+	        valueForHTTPHeaderField: @"Content-Length"] == nil)
+		{
+                  s = [NSString stringWithFormat: @"Content-Length: %d\r\n", l];
+                  [m appendData: [s dataUsingEncoding: NSASCIIStringEncoding]];
+		}
+	      [m appendBytes: "\r\n" length: 2];	// End of headers
+	      _writeData  = m;
+	    }			// Fall through to do the write
 
-              // If we have a known content length => add a header if missing
-              if (l >= 0 && [this->request valueForHTTPHeaderField:@"Content-Length"] == nil)
-                {
-                  s = [NSString stringWithFormat:@"Content-Length: %d\r\n", l];
-                  [m appendData:[s dataUsingEncoding:NSASCIIStringEncoding]];
-                }
+	  case NSStreamEventHasSpaceAvailable: 
+	    {
+	      int	written;
+	      BOOL	sent = NO;
 
-              // End of headers => \r\n
-              [m appendBytes:"\r\n" length:2];
-              _writeData = m;
-
-              // Fall through to handle the actual writing in HasSpaceAvailable
-            }
-            // *** FALLTHROUGH ***
-
-          // ---------------------------------------------------------------
-          // If we can write => flush out _writeData or body
-          // ---------------------------------------------------------------
-          case NSStreamEventHasSpaceAvailable:
-            {
-              if (_debug)
-                {
-                  NSWarnMLog(@"[OutputStream] => NSStreamEventHasSpaceAvailable => writing request data (if any)");
-                }
-              int written;
-              BOOL sent = NO;
-
-              // If we have _writeData => flush it
-              if (_writeData != nil)
-                {
-                  const unsigned char *bytes = [_writeData bytes];
-                  NSUInteger len = [_writeData length];
-
+	      // FIXME: should also send out relevant Cookies
+	      if (_writeData != nil)
+		{
+		  const unsigned char	*bytes = [_writeData bytes];
+		  unsigned		len = [_writeData length];
+                  
                   if (_debug)
                     {
-                      NSWarnMLog(@"[OutputStream] => writing _writeData => total len=%lu, current offset=%ld",
-                                 (unsigned long)len, (long)_writeOffset);
+                      NSWarnMLog(@"self: %@ writing _writeData len: %ld", self, (long)len);
                     }
 
-                  written = [this->output write:(bytes + _writeOffset)
-                                      maxLength:(len - _writeOffset)];
+		  written = [this->output write: bytes + _writeOffset
+				      maxLength: len - _writeOffset];
+                  
                   if (_debug)
                     {
-                      NSWarnMLog(@"[OutputStream] => wrote %d bytes to output", written);
+                      NSWarnMLog(@"self: %@ wrote len: %ld", self, (long)written);
                     }
 
                   if (written > 0)
-                    {
-                      if (_debug == YES)
-                        {
+		    {
+		      if (_debug == YES)
+		        {
                           debugWrite(self, written, bytes + _writeOffset);
-                        }
-                      _writeOffset += written;
-                      if (_writeOffset >= (int)len)
-                        {
-                          DESTROY(_writeData);
+			}
+		      _writeOffset += written;
+		      if (_writeOffset >= len)
+		        {
+			  DESTROY(_writeData);
+			  if (_body == nil)
+			    {
+			      _body = RETAIN([this->request HTTPBodyStream]);
+			      if (_body == nil)
+				{
+				  NSData	*d = [this->request HTTPBody];
 
-                          // Now we handle the body (if any)
-                          if (_body == nil)
-                            {
-                              _body = RETAIN([this->request HTTPBodyStream]);
-                              if (_body == nil)
-                                {
-                                  // No streaming => just use the raw [request HTTPBody]
-                                  NSData *dBody = [this->request HTTPBody];
-                                  if (dBody != nil)
-                                    {
-                                      _body = [NSInputStream alloc];
-                                      _body = [_body initWithData:dBody];
-                                      [_body open];
-                                    }
-                                  else
-                                    {
-                                      // No body at all => we are done sending
-                                      sent = YES;
-                                    }
-                                }
-                              else
-                                {
-                                  // We do have a streaming body => ensure it's open
-                                  if (_debug)
-                                    {
-                                      NSWarnMLog(@"[OutputStream] => found an existing HTTPBodyStream => opening it now");
-                                    }
-                                  [_body open];
-                                }
-                            }
-                        }
-                    }
-                }
-              else if (_body != nil)
-                {
-                  // If we still have body data left
-                  if ([_body hasBytesAvailable])
-                    {
-                      int len = [_body read:WRITE_BUFFER maxLength:MAX_WRITE_BUFFER];
+				  if (d != nil)
+				    {
+				      _body = [NSInputStream alloc];
+				      _body = [_body initWithData: d];
+				      [_body open];
+				    }
+				  else
+				    {
+				      sent = YES;
+				    }
+				}
+			      else //if ([_body streamStatus] == NSStreamStatusNotOpen)
+				{
+				    // TESTPLANT-MAL-20201203:
+				    // Ensure that the body stream we get is open...
+				    // NOTE: invoking streamStatus in the if above makes
+				    // this fail for some reason...
+				    [_body open];
+				}
+			    }
+			}
+		    }
+		}
+	      else if (_body != nil)
+		{
+		  if ([_body hasBytesAvailable])
+		    {
+		      int len;
+
+                      // Probably need a read until end here also similar to _got...
+		      len = [_body read: WRITE_BUFFER maxLength: MAX_WRITE_BUFFER];
                       if (_debug)
                         {
-                          NSWarnMLog(@"[OutputStream] => read %d bytes from _body (streamStatus=%ld)",
-                                     len, (long)[_body streamStatus]);
+                          NSWarnMLog(@"self: %@ _body read len: %ld streamStatus: %ld", self, (long)len, (long)[_body streamStatus]);
                         }
-                      if (len < 0)
-                        {
-                          if (_debug)
-                            {
-                              NSWarnMLog(@"[OutputStream] => error reading from HTTPBody stream => stopping load");
-                            }
-                          [self stopLoading];
-                          NSError *err = [NSError errorWithDomain:@"can't read body"
-                                                             code:0
-                                                         userInfo:nil];
-                          [this->client URLProtocol:self didFailWithError:err];
-                          DESTROY(this->client);
-                          return;
-                        }
-                      else if (len > 0)
-                        {
-                          written = [this->output write:WRITE_BUFFER maxLength:len];
-                          if (_debug)
-                            {
-                              NSWarnMLog(@"[OutputStream] => wrote %d body bytes to output", written);
-                            }
-                          if (written > 0)
-                            {
-                              if (_debug)
-                                {
+		      if (len < 0)
+			{
+			  if (_debug == YES)
+			    {
+			      NSWarnMLog(@"%@ error reading from HTTPBody stream %@", self, [NSError _last]);
+			    }
+			  [self stopLoading];
+			  NSError *error = [NSError errorWithDomain: @"can't read body" code: 0 userInfo: nil];
+			  [this->client URLProtocol: self didFailWithError: error];
+			  DESTROY(this->client);
+			  return;
+			}
+		      else if (len > 0)
+		        {
+			  written = [this->output write: WRITE_BUFFER maxLength: len];
+			  if (written > 0)
+			    {
+			      if (_debug == YES)
+				{
                                   debugWrite(self, written, WRITE_BUFFER);
+				}
+			      len -= written;
+			      if (len > 0)
+			        {
+				  /* Couldn't write it all now, save and try
+				   * again later.
+				   */
+				  _writeData = [[NSData alloc] initWithBytes:
+				    WRITE_BUFFER + written length: len];
+				  _writeOffset = 0;
+				}
+			      else if (len == 0 && ![_body hasBytesAvailable])
+				{
+				  /* all _body's bytes are read and written
+                                   * so we shouldn't wait for another
+                                   * opportunity to close _body and set
+				   * the flag 'sent'.
+				   */
+				  [_body close];
+				  DESTROY(_body);
+				  sent = YES;
                                 }
-                              len -= written;
-                              if (len > 0)
-                                {
-                                  if (_debug)
-                                    {
-                                      NSWarnMLog(@"[OutputStream] => partial write => saving leftover data, %d bytes", len);
-                                    }
-                                  // We have leftover data => store in _writeData
-                                  _writeData = [[NSData alloc] initWithBytes:(WRITE_BUFFER+written)
-                                                                      length:len];
-                                  _writeOffset = 0;
-                                }
-                              else if (len == 0 && ![_body hasBytesAvailable])
-                                {
-                                  // all body bytes are written => done
-                                  [_body close];
-                                  DESTROY(_body);
-                                  sent = YES;
-                                }
-                            }
+			    }
                           else if ([this->output streamStatus] == NSStreamStatusWriting)
                             {
+                              /* Couldn't write it all now, save and try
+                               * again later.
+                               */
                               if (_debug)
                                 {
-                                  NSWarnMLog(@"[OutputStream] => wrote 0 bytes => storing leftover of length=%d", len);
+                                  NSWarnMLog(@"self: %@ saving _writeData len: %ld", self, (long)len);
                                 }
-                              _writeData = [[NSData alloc] initWithBytes:WRITE_BUFFER
-                                                                  length:len];
+                              _writeData = [[NSData alloc] initWithBytes:
+                                            WRITE_BUFFER length: len];
                               _writeOffset = 0;
                             }
                         }
-                      else
-                        {
-                          // len == 0 => body has no more data => done
-                          [_body close];
-                          DESTROY(_body);
-                          sent = YES;
-                        }
-                    }
-                  else
-                    {
-                      // no more bytes in _body => done
-                      [_body close];
-                      DESTROY(_body);
-                      sent = YES;
-                    }
-                }
-
-              if (sent == YES)
-                {
-                  if (_debug)
-                    {
-                      NSWarnMLog(@"[OutputStream] => request fully sent => shouldClose=%ld", (long)_shouldClose);
-                    }
-                  if (_shouldClose == YES)
-                    {
-                      if (_debug)
-                        {
-                          NSWarnMLog(@"[OutputStream] => _shouldClose => removing from runloop, closing stream");
-                        }
-                      [this->output setDelegate:nil];
-                      [this->output removeFromRunLoop:[NSRunLoop currentRunLoop]
-                                             forMode:NSDefaultRunLoopMode];
-                      [this->output close];
-                      DESTROY(this->output);
-                    }
-                }
-
-              if (_debug)
-                {
-                  NSWarnMLog(@"[OutputStream] => done handling hasSpaceAvailable => returning");
-                }
-              return;
-            } // end case NSStreamEventHasSpaceAvailable
-
-          default:
-            // We'll handle unexpected events below or after the switch
-            break;
-        }
+		      else
+		        {
+			  [_body close];
+			  DESTROY(_body);
+			  sent = YES;
+			}
+		    }
+		  else
+		    {
+		      [_body close];
+		      DESTROY(_body);
+		      sent = YES;
+		    }
+		}
+	      if (sent == YES)
+		{
+		  if (_debug)
+		    {
+		      NSWarnMLog(@"%@ request sent - should close: %ld", self, (long)_shouldClose);
+		    }
+		  if (_shouldClose == YES)
+		    {
+		      [this->output setDelegate: nil];
+		      [this->output removeFromRunLoop:
+			[NSRunLoop currentRunLoop]
+			forMode: NSDefaultRunLoopMode];
+		      [this->output close];
+		      DESTROY(this->output);
+		    }
+		}
+	      return;  // done
+	    }
+	  default: 
+	    break;
+	}
     }
   else
     {
-      NSLog(@"[handleEvent] Unexpected stream (%p) that doesn't match input (%p) or output (%p)",
-            stream, this->input, this->output);
+      NSLog(@"Unexpected event %"PRIuPTR
+	" occurred on stream %@ not being used by %@",
+	event, stream, self);
     }
-
-  // -----------------------------------------------------------------------
-  // If we get here => either a default or an error event not already handled
-  // -----------------------------------------------------------------------
   if (event == NSStreamEventErrorOccurred)
     {
-      NSError *error = AUTORELEASE(RETAIN([stream streamError]));
-      if (_debug)
-        {
-          NSWarnMLog(@"[handleEvent] => NSStreamEventErrorOccurred => %@", error);
-        }
+      NSError	*error = AUTORELEASE(RETAIN([stream streamError]));
+
       [self stopLoading];
-      [this->client URLProtocol:self didFailWithError:error];
+      [this->client URLProtocol: self didFailWithError: error];
       DESTROY(this->client);
     }
   else
     {
-      if (_debug)
-        {
-          NSWarnMLog(@"[handleEvent] => ignoring unexpected event=0x%lx on stream=%p of self=%@",
-                     (unsigned long)event, stream, self);
-        }
-      NSLog(@"[handleEvent] ignoring unexpected event=0x%lx on stream=%p of self=%@",
-            (unsigned long)event, stream, self);
-    }
-
-  if (_debug)
-    {
-      NSWarnMLog(@"[MethodExit] stream=%p handleEvent=0x%lx => done", stream, (unsigned long)event);
+      NSLog(@"Unexpected event %"PRIuPTR" ignored on stream %@ of %@",
+	event, stream, self);
     }
 }
-
 
 - (void) useCredential: (NSURLCredential*)credential
   forAuthenticationChallenge: (NSURLAuthenticationChallenge*)challenge
