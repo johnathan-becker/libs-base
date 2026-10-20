@@ -702,6 +702,8 @@ GS_SINT8
 GS_WORDS_BIGENDIAN
 PKGCONFIG
 WHOAMI
+GSFORMAT_CFLAGS
+CLANG_CC
 EGREP
 GREP
 CPP
@@ -5323,6 +5325,59 @@ $as_echo "$ac_cv_safe_to_define___extensions__" >&6; }
 
   $as_echo "#define _TANDEM_SOURCE 1" >>confdefs.h
 
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether the compiler is clang" >&5
+$as_echo_n "checking whether the compiler is clang... " >&6; }
+if test ! x"${GCC}" = x"yes" ; then
+  CLANG_CC=no
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+else
+  if "${CC}" -v 2>&1 | grep -q 'clang version'; then
+    CLANG_CC=yes
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+  else
+    CLANG_CC=no
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+  fi
+fi
+
+
+# LLVM's DFA jump threading pass (on by default from clang 23) miscompiles the
+# computed-goto table in GSPrivateFormat (llvm/llvm-project#231864).
+GSFORMAT_CFLAGS=
+if test "$CLANG_CC" = "yes"; then
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking whether the compiler accepts -mllvm -enable-dfa-jump-thread=false" >&5
+printf %s "checking whether the compiler accepts -mllvm -enable-dfa-jump-thread=false... " >&6; }
+  saved_CFLAGS="$CFLAGS"
+  CFLAGS="$CFLAGS -mllvm -enable-dfa-jump-thread=false"
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main (void)
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"
+then :
+  { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf '%s\n' "yes" >&6; }
+    GSFORMAT_CFLAGS="-mllvm -enable-dfa-jump-thread=false"
+else case e in #(
+  e) { printf '%s\n' "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf '%s\n' "no" >&6; } ;;
+esac
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.beam conftest.$ac_ext
+  CFLAGS="$saved_CFLAGS"
+fi
 
 
 

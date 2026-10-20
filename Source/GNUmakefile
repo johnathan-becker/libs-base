@@ -322,6 +322,9 @@ NSZone.m \
 externs.m \
 objc-load.m 
 
+# Works around a clang miscompile of GSPrivateFormat (see configure.ac).
+GSFormat.m_FILE_FLAGS += $(GSFORMAT_CFLAGS)
+
 ifneq ($(GNUSTEP_TARGET_OS), mingw32)
   ifneq ($(GNUSTEP_TARGET_OS), mingw64)
 BASE_MFILES += \

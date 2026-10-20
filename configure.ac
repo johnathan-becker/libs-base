@@ -1121,6 +1121,36 @@ AC_PROG_CC
 AC_PROG_CPP
 AC_USE_SYSTEM_EXTENSIONS
 
+AC_MSG_CHECKING(whether the compiler is clang)
+if test ! x"${GCC}" = x"yes" ; then
+  CLANG_CC=no
+  AC_MSG_RESULT(no)
+else
+  if "${CC}" -v 2>&1 | grep -q 'clang version'; then
+    CLANG_CC=yes
+    AC_MSG_RESULT(yes)
+  else
+    CLANG_CC=no
+    AC_MSG_RESULT(no)
+  fi
+fi
+AC_SUBST(CLANG_CC)
+
+# LLVM's DFA jump threading pass (on by default from clang 23) miscompiles the
+# computed-goto table in GSPrivateFormat (llvm/llvm-project#231864).
+GSFORMAT_CFLAGS=
+if test "$CLANG_CC" = "yes"; then
+  AC_MSG_CHECKING(whether the compiler accepts -mllvm -enable-dfa-jump-thread=false)
+  saved_CFLAGS="$CFLAGS"
+  CFLAGS="$CFLAGS -mllvm -enable-dfa-jump-thread=false"
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [])],
+    AC_MSG_RESULT(yes)
+    GSFORMAT_CFLAGS="-mllvm -enable-dfa-jump-thread=false",
+    AC_MSG_RESULT(no))
+  CFLAGS="$saved_CFLAGS"
+fi
+AC_SUBST(GSFORMAT_CFLAGS)
+
 
 # Large file support needed by NSData/NSFileHandle.
 # These macros must be called after AC_USE_SYSTEM_EXTENSIONS because
